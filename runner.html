@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Раннер — Drink Driven business trip</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(160deg, #f5f0e8 0%, #e8dfd0 50%, #f0ebe3 100%);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      color: #2c2416;
+    }
+    h1 {
+      margin-bottom: 0.75rem;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #3d3428;
+      letter-spacing: 0.02em;
+    }
+    #gameContainer {
+      position: relative;
+      border: 4px solid #c4b8a8;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.6);
+    }
+    #gameCanvas {
+      display: block;
+      background: #e8e2d9;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+    #ui {
+      margin-top: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      font-size: 15px;
+    }
+    #score { color: #c45c3e; font-weight: 700; }
+    #messageBox {
+      max-width: 420px;
+      min-height: 2.8em;
+      padding: 0.6rem 0.9rem;
+      background: #fffbf5;
+      border: 2px solid #d4c4a8;
+      border-radius: 8px;
+      font-size: 13px;
+      color: #4a4035;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    #startScreen, #gameOverScreen, #winScreen {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(245, 240, 232, 0.92);
+      gap: 1.25rem;
+    }
+    #gameOverScreen, #winScreen { display: none; }
+    #startScreen p, #gameOverScreen p, #winScreen p { color: #3d3428; font-size: 1.05rem; }
+    .btn {
+      padding: 0.7rem 1.8rem;
+      font-size: 17px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      background: linear-gradient(180deg, #d4533a 0%, #b8422a 100%);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(196, 92, 58, 0.35);
+    }
+    .btn:hover { background: linear-gradient(180deg, #e06045 0%, #c45c3e 100%); box-shadow: 0 6px 16px rgba(196, 92, 58, 0.45); }
+    .hint { font-size: 12px; color: #7a6f5f; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Ваня в офисе в Минске</h1>
+  <div id="gameContainer">
+    <canvas id="gameCanvas" width="720" height="600"></canvas>
+    <div id="startScreen">
+      <p>Иван бежит по офису. Не врезайся в стены!</p>
+      <button class="btn" id="startBtn">Старт</button>
+      <p class="hint">↑ / W — вверх, ↓ / S — вниз</p>
+    </div>
+    <div id="gameOverScreen">
+      <p>Врезался! Очки: <span id="finalScore">0</span></p>
+      <button class="btn" id="restartBtn">Заново</button>
+    </div>
+    <div id="winScreen">
+      <p>Уровень <span id="winLevel">1</span> пройден!</p>
+      <button class="btn" id="nextLevelBtn">Следующий уровень</button>
+    </div>
+  </div>
+  <div id="ui">
+    <span>Очки: <span id="score">0</span></span>
+    <div id="messageBox"></div>
+  </div>
+
+  <script>
+    (function() {
+      const IVAN_SPRITE_PATH = 'runner/ivan-running-animation-sprite.png';
+      const WORKER_SPRITE_PATH = 'runner/pixel-art-worker-sprite.png';
+      const WORKER_2_SPRITE_PATH = 'runner/pixel-art-worker-2-sprite.png';
+      const WORKER_3_SPRITE_PATH = 'runner/pixel-art-worker-3-sprite.png';
+      const WALL_SPRITE_PATH = 'runner/pixel-art-wall-office-obstacle.png';
+      const BACKGROUND_SPRITE_PATH = 'runner/pixel-art-game-background-yandex.webp';
+      const BGM_PATH = 'runner/ne-dogonyat.mp3';
+      const IVAN_FRAME_COUNT = 4;
+      const WIN_SCORE = 10;
+      const ANIM_MS_PER_FRAME = 120;
+
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d');
+      const startScreen = document.getElementById('startScreen');
+      const gameOverScreen = document.getElementById('gameOverScreen');
+      const winScreen = document.getElementById('winScreen');
+      const startBtn = document.getElementById('startBtn');
+      const restartBtn = document.getElementById('restartBtn');
+      const nextLevelBtn = document.getElementById('nextLevelBtn');
+      const scoreEl = document.getElementById('score');
+      const finalScoreEl = document.getElementById('finalScore');
+      const winLevelEl = document.getElementById('winLevel');
+      const messageBox = document.getElementById('messageBox');
+
+      const LANE_COUNT = 3;
+      const LANE_H = Math.floor(canvas.height / LANE_COUNT);
+      const HERO_W = 140;
+      const HERO_H = 210;
+      const HERO_LANE_Y = (laneIndex) => laneIndex * LANE_H + (LANE_H - HERO_H) / 2;
+      const OBSTACLE_W = 80;
+      const OBSTACLE_H = LANE_H - 16;
+      const COLLEAGUE_W = Math.round(HERO_W * 0.85);
+      const COLLEAGUE_H = Math.round(HERO_H * 0.85);
+      const HERO_X = 72 + Math.round((canvas.width / 2 - 72) * 0.2);
+      const SCROLL_SPEED = 6;
+      const SPAWN_INTERVAL = 58;
+      const COLLEAGUE_CHANCE = 0.4;
+
+      const QUOTES = [
+        { name: 'Гоша', text: 'Ваня привет ГЫГЫГЫГЫ' },
+        { name: 'Егор', text: 'Вань, может в бар?' },
+        { name: 'Серёжа', text: 'Пошли по кофе?' },
+        { name: 'Кирилл', text: 'Посмотри PR с требованиями' },
+        { name: 'Лёша', text: 'Ваня, как ДНД?' },
+        { name: 'Гоша', text: 'МЯУ' },
+      ];
+
+      let ivanSpriteImg = null;
+      let workerSprites = [];
+      let wallSpriteImg = null;
+      let bgSpriteImg = null;
+      let bgMusic = null;
+      let audioCtx = null;
+      let gameState = 'menu';
+      let level = 1;
+      let heroLane = 1;
+      let scrollOffset = 0;
+      let score = 0;
+      let frames = 0;
+      let obstacles = [];
+      let colleagues = [];
+      let currentMessage = '';
+      let messageTimer = 0;
+      let animFrame = 0;
+      let lastAnimTime = 0;
+
+      function loadImage(src) {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error('Не удалось загрузить ' + src));
+          img.src = src;
+        });
+      }
+
+      function initAudio() {
+        if (audioCtx) return;
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+        if (bgMusic) return;
+        bgMusic = new Audio();
+        bgMusic.loop = true;
+        bgMusic.volume = 0.22;
+        bgMusic.src = BGM_PATH;
+      }
+
+      function playBgm() {
+        initAudio();
+        if (!bgMusic || gameState !== 'playing') return;
+        bgMusic.currentTime = 0;
+        const play = () => {
+          bgMusic.play().catch(() => {});
+        };
+        if (bgMusic.readyState >= 2) {
+          play();
+        } else {
+          bgMusic.addEventListener('canplaythrough', play, { once: true });
+        }
+      }
+
+      function stopBgm() {
+        if (bgMusic) bgMusic.pause();
+      }
+
+      function playSoundCollect() {
+        if (!audioCtx) initAudio();
+        if (!audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.frequency.setValueAtTime(523, audioCtx.currentTime);
+        osc.frequency.setValueAtTime(659, audioCtx.currentTime + 0.05);
+        osc.type = 'sine';
+        gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+        osc.start(audioCtx.currentTime);
+        osc.stop(audioCtx.currentTime + 0.15);
+      }
+
+      function playSoundCrash() {
+        if (!audioCtx) initAudio();
+        if (!audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+        osc.type = 'sawtooth';
+        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+        osc.start(audioCtx.currentTime);
+        osc.stop(audioCtx.currentTime + 0.3);
+      }
+
+      function playSoundWin() {
+        if (!audioCtx) initAudio();
+        if (!audioCtx) return;
+        const notes = [523, 659, 784, 1047];
+        const base = audioCtx.currentTime;
+        notes.forEach((freq, i) => {
+          const t = base + i * 0.12;
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.frequency.setValueAtTime(freq, t);
+          osc.type = 'sine';
+          gain.gain.setValueAtTime(0.12, t);
+          gain.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
+          osc.start(t);
+          osc.stop(t + 0.2);
+        });
+      }
+
+      function drawBackground() {
+        if (!bgSpriteImg) return;
+        const scale = canvas.height / bgSpriteImg.height;
+        const bgW = bgSpriteImg.width * scale;
+        const offset = ((scrollOffset % bgW) + bgW) % bgW;
+        let x = -offset;
+        ctx.imageSmoothingEnabled = false;
+        while (x < canvas.width) {
+          ctx.drawImage(bgSpriteImg, 0, 0, bgSpriteImg.width, bgSpriteImg.height, x, 0, bgW, canvas.height);
+          x += bgW;
+        }
+      }
+
+      const LANE_COLORS = ['rgba(235, 229, 220, 0.45)', 'rgba(226, 220, 210, 0.45)', 'rgba(217, 210, 200, 0.45)'];
+      function drawLanes() {
+        for (let i = 0; i < LANE_COUNT; i++) {
+          ctx.fillStyle = LANE_COLORS[i];
+          ctx.fillRect(0, i * LANE_H, canvas.width, LANE_H);
+        }
+        ctx.strokeStyle = '#c4b8a8';
+        ctx.lineWidth = 3;
+        for (let i = 1; i < LANE_COUNT; i++) {
+          const y = i * LANE_H;
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(canvas.width, y);
+          ctx.stroke();
+        }
+      }
+
+      function drawHero() {
+        if (!ivanSpriteImg) return;
+        const y = HERO_LANE_Y(heroLane);
+        const frameW = ivanSpriteImg.width / IVAN_FRAME_COUNT;
+        const sx = animFrame * frameW;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'low';
+        ctx.shadowColor = 'rgba(0,0,0,0.15)';
+        ctx.shadowBlur = 8;
+        ctx.shadowOffsetY = 4;
+        ctx.drawImage(ivanSpriteImg, sx, 0, frameW, ivanSpriteImg.height, HERO_X, y, HERO_W, HERO_H);
+        ctx.imageSmoothingEnabled = false;
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetY = 0;
+      }
+
+      function drawObstacle(obs) {
+        const laneY = obs.lane * LANE_H;
+        const y = laneY + (LANE_H - OBSTACLE_H) / 2;
+        if (wallSpriteImg) {
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(wallSpriteImg, 0, 0, wallSpriteImg.width, wallSpriteImg.height, obs.x, y, OBSTACLE_W, OBSTACLE_H);
+        } else {
+          ctx.fillStyle = '#c45c3e';
+          ctx.fillRect(obs.x, y, OBSTACLE_W, OBSTACLE_H);
+        }
+      }
+
+      const WORKER_SCALE_MULT = [1.07, 1.25, 1.725];
+      function drawColleague(col) {
+        const variant = col.variant != null ? col.variant : 0;
+        const img = workerSprites[variant];
+        if (!img) return;
+        const laneY = col.lane * LANE_H;
+        const y = laneY + (LANE_H - COLLEAGUE_H) / 2;
+        const mult = WORKER_SCALE_MULT[variant] ?? 1;
+        const scale = Math.min(COLLEAGUE_W / img.width, COLLEAGUE_H / img.height) * mult;
+        const drawW = img.width * scale;
+        const drawH = img.height * scale;
+        const drawX = col.x + (COLLEAGUE_W - drawW) / 2;
+        const drawY = y + (COLLEAGUE_H - drawH) / 2;
+        ctx.imageSmoothingEnabled = false;
+        ctx.shadowColor = 'rgba(0,0,0,0.12)';
+        ctx.shadowBlur = 6;
+        ctx.shadowOffsetY = 3;
+        ctx.save();
+        ctx.translate(drawX + drawW / 2, drawY + drawH / 2);
+        ctx.scale(-1, 1);
+        ctx.translate(-(drawX + drawW / 2), -(drawY + drawH / 2));
+        ctx.drawImage(img, 0, 0, img.width, img.height, drawX, drawY, drawW, drawH);
+        ctx.restore();
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetY = 0;
+
+        if (col.scored && col.quote) {
+          const line1 = col.quote.name + ':';
+          const line2 = '"' + col.quote.text + '"';
+          const pad = 8;
+          const lineH = 18;
+          ctx.font = '14px "Segoe UI", sans-serif';
+          const w1 = ctx.measureText(line1).width;
+          const w2 = Math.min(ctx.measureText(line2).width, COLLEAGUE_W + 80);
+          const bubbleW = Math.max(w1, w2) + pad * 2;
+          const bubbleH = lineH * 2 + pad * 2;
+          const bubbleX = col.x + (COLLEAGUE_W - bubbleW) / 2;
+          const gap = 10;
+          const bubbleY = col.lane === 0 ? y + COLLEAGUE_H + gap : y - bubbleH - gap;
+          ctx.fillStyle = 'rgba(255,255,255,0.96)';
+          ctx.strokeStyle = '#b8a898';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          const r = 6;
+          ctx.moveTo(bubbleX + r, bubbleY);
+          ctx.lineTo(bubbleX + bubbleW - r, bubbleY);
+          ctx.quadraticCurveTo(bubbleX + bubbleW, bubbleY, bubbleX + bubbleW, bubbleY + r);
+          ctx.lineTo(bubbleX + bubbleW, bubbleY + bubbleH - r);
+          ctx.quadraticCurveTo(bubbleX + bubbleW, bubbleY + bubbleH, bubbleX + bubbleW - r, bubbleY + bubbleH);
+          ctx.lineTo(bubbleX + r, bubbleY + bubbleH);
+          ctx.quadraticCurveTo(bubbleX, bubbleY + bubbleH, bubbleX, bubbleY + bubbleH - r);
+          ctx.lineTo(bubbleX, bubbleY + r);
+          ctx.quadraticCurveTo(bubbleX, bubbleY, bubbleX + r, bubbleY);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = '#3d3428';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          ctx.fillText(line1, bubbleX + pad, bubbleY + pad);
+          ctx.fillText(line2.length > 28 ? line2.slice(0, 27) + '…' : line2, bubbleX + pad, bubbleY + pad + lineH);
+          ctx.textAlign = 'start';
+          ctx.textBaseline = 'alphabetic';
+        }
+      }
+
+      function heroRect() {
+        const y = HERO_LANE_Y(heroLane);
+        return { x: HERO_X, y, w: HERO_W, h: HERO_H };
+      }
+
+      function collides(a, b) {
+        return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+      }
+
+      function gameOver() {
+        gameState = 'gameover';
+        finalScoreEl.textContent = score;
+        gameOverScreen.style.display = 'flex';
+        stopBgm();
+        playSoundCrash();
+      }
+
+      function spawnEntity() {
+        const lane = Math.floor(Math.random() * LANE_COUNT);
+        const isColleague = Math.random() < COLLEAGUE_CHANCE;
+        if (isColleague) {
+          const q = QUOTES[Math.floor(Math.random() * QUOTES.length)];
+          const variant = Math.floor(Math.random() * workerSprites.length) || 0;
+          colleagues.push({
+            x: canvas.width + 30,
+            lane,
+            quote: q,
+            scored: false,
+            variant: variant
+          });
+        } else {
+          obstacles.push({ x: canvas.width + 20, lane });
+        }
+      }
+
+      function update() {
+        if (gameState !== 'playing') return;
+
+        frames++;
+        const now = performance.now();
+        if (lastAnimTime === 0) lastAnimTime = now;
+        if (now - lastAnimTime >= ANIM_MS_PER_FRAME) {
+          animFrame = (animFrame + 1) % IVAN_FRAME_COUNT;
+          lastAnimTime = now;
+        }
+        if (frames % SPAWN_INTERVAL === 0) spawnEntity();
+
+        scrollOffset += SCROLL_SPEED;
+
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+          obstacles[i].x -= SCROLL_SPEED;
+          if (obstacles[i].x + OBSTACLE_W < 0) obstacles.splice(i, 1);
+        }
+
+        const hr = heroRect();
+        for (const obs of obstacles) {
+          if (heroLane !== obs.lane) continue;
+          const oy = obs.lane * LANE_H + (LANE_H - OBSTACLE_H) / 2;
+          if (collides(hr, { x: obs.x, y: oy, w: OBSTACLE_W, h: OBSTACLE_H })) {
+            gameOver();
+            return;
+          }
+        }
+
+        for (const col of colleagues) {
+          col.x -= SCROLL_SPEED;
+          if (!col.scored && heroLane === col.lane && hr.x + hr.w > col.x) {
+            col.scored = true;
+            score += 1;
+            playSoundCollect();
+            currentMessage = col.quote.name + ': "' + col.quote.text + '"';
+            messageTimer = 220;
+            if (score >= WIN_SCORE) {
+              gameState = 'win';
+              winLevelEl.textContent = level;
+              winScreen.style.display = 'flex';
+              stopBgm();
+              playSoundWin();
+              return;
+            }
+          }
+        }
+        colleagues = colleagues.filter(col => col.x + COLLEAGUE_W >= 0);
+
+        if (messageTimer > 0) messageTimer--;
+        else currentMessage = '';
+      }
+
+      function draw() {
+        drawBackground();
+        drawLanes();
+        for (const obs of obstacles) drawObstacle(obs);
+        for (const col of colleagues) drawColleague(col);
+        drawHero();
+
+        scoreEl.textContent = score + ' / ' + WIN_SCORE;
+        messageBox.textContent = currentMessage;
+      }
+
+      function loop() {
+        update();
+        draw();
+        requestAnimationFrame(loop);
+      }
+
+      document.addEventListener('keydown', (e) => {
+        if (gameState === 'menu') return;
+        if (gameState === 'gameover') return;
+        if (gameState === 'win') return;
+        if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+          e.preventDefault();
+          heroLane = Math.max(0, heroLane - 1);
+        }
+        if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+          e.preventDefault();
+          heroLane = Math.min(LANE_COUNT - 1, heroLane + 1);
+        }
+      });
+
+      function startLevel() {
+        gameState = 'playing';
+        heroLane = 1;
+        score = 0;
+        frames = 0;
+        animFrame = 0;
+        lastAnimTime = 0;
+        obstacles = [];
+        colleagues = [];
+        currentMessage = '';
+        messageTimer = 0;
+      }
+
+      startBtn.addEventListener('click', () => {
+        startScreen.style.display = 'none';
+        startLevel();
+        playBgm();
+      });
+
+      restartBtn.addEventListener('click', () => {
+        gameOverScreen.style.display = 'none';
+        startLevel();
+        playBgm();
+      });
+
+      nextLevelBtn.addEventListener('click', () => {
+        winScreen.style.display = 'none';
+        level++;
+        startLevel();
+        playBgm();
+      });
+
+      Promise.all([
+        loadImage(IVAN_SPRITE_PATH),
+        loadImage(WORKER_SPRITE_PATH),
+        loadImage(WORKER_2_SPRITE_PATH),
+        loadImage(WORKER_3_SPRITE_PATH),
+        loadImage(WALL_SPRITE_PATH),
+        loadImage(BACKGROUND_SPRITE_PATH)
+      ])
+        .then(([ivanImg, workerImg, worker2Img, worker3Img, wallImg, bgImg]) => {
+          ivanSpriteImg = ivanImg;
+          workerSprites = [workerImg, worker2Img, worker3Img];
+          wallSpriteImg = wallImg;
+          bgSpriteImg = bgImg;
+          loop();
+        })
+        .catch((err) => {
+          console.error(err);
+          messageBox.textContent = 'Загрузите спрайты: ' + [IVAN_SPRITE_PATH, WORKER_SPRITE_PATH, WORKER_2_SPRITE_PATH, WORKER_3_SPRITE_PATH, WALL_SPRITE_PATH, BACKGROUND_SPRITE_PATH].join(', ');
+          loop();
+        });
+    })();
+  </script>
+</body>
+</html>
